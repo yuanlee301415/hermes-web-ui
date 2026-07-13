@@ -8,8 +8,8 @@ import { fetchAuthStatus, loginWithPassword } from "@/api/auth";
 const { t } = useI18n();
 const router = useRouter();
 
-const username = ref("");
-const password = ref("");
+const username = ref("admin");
+const password = ref("123456");
 const loading = ref(false);
 const errorMsg = ref("");
 const showLockResetHint = ref(false);
@@ -22,6 +22,7 @@ if (hasApiKey()) {
 onMounted(async () => {
   try {
     await fetchAuthStatus();
+    await handleLogin();
   } catch {
     // Login remains available; the submit request will surface connection errors.
   }
