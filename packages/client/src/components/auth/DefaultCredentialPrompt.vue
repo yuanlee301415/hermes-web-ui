@@ -42,8 +42,8 @@ async function checkDefaultCredentials() {
   try {
     const user = await fetchCurrentUser();
     promptedUserId.value = user.id;
-    const dismissed = sessionStorage.getItem(dismissalKey(user.id)) === "1";
-    show.value = !!user.requiresCredentialChange && !dismissed;
+    // const dismissed = sessionStorage.getItem(dismissalKey(user.id)) === "1";
+    // show.value = !!user.requiresCredentialChange && !dismissed;
   } catch {
     show.value = false;
   } finally {
