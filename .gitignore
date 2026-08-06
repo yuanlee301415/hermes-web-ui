@@ -47,6 +47,7 @@ hermes-dependencies.md
 *.sw?
 .superpowers/
 CLAUDE.md
+.reasonix/
 # Client source map artifacts
 packages/client/src/**/*.js
 .hermes/
