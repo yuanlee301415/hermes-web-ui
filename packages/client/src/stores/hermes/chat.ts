@@ -3277,26 +3277,44 @@ export const useChatStore = defineStore('chat', () => {
   function resumeServerWorkingRun(sid: string, force = false) {
     // 如果已经在流式传输，不注册重复监听器
     if (streamStates.value.has(sid)) return
+    
     // 只有当服务器在恢复期间报告了活跃运行时才设置监听器
     if (!force && !serverWorking.value.has(sid)) return
 
+    // 防止重复清理的幂等标志
     let closed = false
+
+    // ========= 记录恢复时的助手状态 ============
+    
+    // 是否产生过任何助手文本（包括 reasoning/thinking/message.delta）。用于 run.completed 时判断是否"吞掉错误"
     let runProducedAssistantText = false
+    
+    // 是否产生过实际的 message.delta 内容（不含 reasoning）。用于决定是否触发自动语音播放
     let runProducedAssistantContent = false
+    
+    // 是否有工具活动（包括运行中的工具和已完成的工具）。用于 run.completed 时判断是否"吞掉错误"
     let runHadToolActivity = false
+    
+    // 当前助手消息 ID
     let activeAssistantMessageId: string | null = null
+    
+    // 当前正在流式写入的助手消息 ID。 message.delta 会向此消息追加内容； tool.started 时会先关闭它的 isStreaming 状态
     let reasoningAssistantMessageId: string | null = null
+    
+    // 当前 run 的标记符，用于跨事件追踪同一次 run。每次 run.started 或带 marker 的事件都会更新它
     let activeRunMarker: string | null = null
 
+    // 清理恢复状态
     const cleanup = () => {
       if (closed) return
       closed = true
       streamStates.value.delete(sid)
       serverWorking.value.delete(sid)
-      // 从全局会话处理器注销
+      // 从全局会话处理器注销事件监听器
       unregisterSessionHandlers(sid)
     }
 
+    // 关闭流式助手
     const closeStreamingAssistant = () => {
       const msgs = getSessionMsgs(sid)
       msgs.forEach(m => {
@@ -3311,9 +3329,11 @@ export const useChatStore = defineStore('chat', () => {
 
     /**
      * 初始化恢复的助手状态
+     * - 从已存在的消息列表中识别"被恢复的助手消息"（可能是页面刷新前未完成的部分），重新挂上 isStreaming 标记并恢复指针，保证 UI 接续显示。
      */
     const initializeResumedAssistantState = () => {
       const resumedAssistantState = resolveResumedAssistantState(getSessionMsgs(sid), { activeRunMarker })
+      console.log('initializeResumedAssistantState>resumedAssistantState:', resumedAssistantState)
       activeRunMarker = resumedAssistantState.runMarker
       if (resumedAssistantState.activeAssistant) {
         resumedAssistantState.activeAssistant.isStreaming = true
@@ -3333,34 +3353,43 @@ export const useChatStore = defineStore('chat', () => {
     // 共享事件处理器 —— 按 session_id 标签过滤
     function handleEvent(evt: RunEvent) {
       if (closed) return
+      
       // 过滤此会话的事件（服务器用 session_id 标记所有事件）
       if (evt.session_id && evt.session_id !== sid) return
+      
       const eventRunMarker = readRunMarker(evt)
       if (eventRunMarker) activeRunMarker = eventRunMarker
+      
       switch (evt.event) {
+          // 运行排队
         case 'run.queued': {
           handleRunQueuedEvent(sid, evt)
           break
         }
 
+        // 会话命令
         case 'session.command': {
           handleSessionCommandEvent(evt)
           break
         }
 
+        // 代理事件
         case 'agent.event': {
           handleAgentEvent(evt)
           break
         }
 
+        // 重连失败：作为代理事件处理
         case 'run.reattach_failed': {
           handleAgentEvent(evt)
           break
         }
-
+          
+        // 运行开始
         case 'run.started': {
-          // 运行开始：重置状态
           serverWorking.value.add(sid)
+          
+          // 重置状态
           clearAgentEventMessages(sid)
           setAbortState(null)
           setCompressionState(sid, null)
@@ -3369,6 +3398,7 @@ export const useChatStore = defineStore('chat', () => {
           runHadToolActivity = false
           closeStreamingAssistant()
           activeRunMarker = readRunMarker(evt) ?? null
+          
           // 更新队列长度
           if ((evt as any).queue_length > 0) {
             queueLengths.value.set(sid, (evt as any).queue_length)
@@ -3378,7 +3408,9 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 压缩开始
         case 'compression.started': {
+          // 设置压缩状态
           setCompressionState(sid, {
             compressing: true,
             messageCount: (evt as any).message_count || 0,
@@ -3389,6 +3421,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 压缩完成：更新压缩状态和 token 计数
         case 'compression.completed': {
           const afterTokens = (evt as any).contextTokens || (evt as any).afterTokens || 0
           setCompressionState(sid, {
@@ -3399,10 +3432,14 @@ export const useChatStore = defineStore('chat', () => {
             compressed: (evt as any).compressed ?? false,
             error: (evt as any).error,
           })
+
+          // 更新上下文 token 计数
           if ((evt as any).contextTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
             if (target) target.contextTokens = (evt as any).contextTokens
           }
+
+          // 5秒后自动清除压缩状态
           setTimeout(() => {
             const state = compressionStates.value.get(sid)
             if (state && !state.compressing) {
@@ -3412,54 +3449,69 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 中断开始
         case 'abort.started': {
           setAbortState({ aborting: true, synced: null })
           break
         }
 
+        // 中断超时
         case 'abort.timeout': {
           setAbortState({ aborting: true, synced: false, timedOut: true, message: (evt as any).message })
           break
         }
 
+        // 中断完成
         case 'abort.completed': {
           setAbortState({ aborting: false, synced: (evt as any).synced ?? false })
           clearPendingInteractions(sid)
+
+          // 如果还有队列消息，更新队列长度并继续
           if ((evt as any).queue_length > 0) {
             queueLengths.value.set(sid, (evt as any).queue_length)
             setAbortState(null)
             break
           }
+
           const msgs = getSessionMsgs(sid)
           const lastMsg = msgs[msgs.length - 1]
+
+          // 结束流式消息
           if (lastMsg?.isStreaming) {
             updateMessage(sid, lastMsg.id, { isStreaming: false })
           }
+
+          // 将所有运行中的工具状态改为完成
           msgs.forEach((m, i) => {
             if (m.role === 'tool' && m.toolStatus === 'running') {
               msgs[i] = { ...m, toolStatus: 'done' }
             }
           })
+
           cleanup()
           setAbortState(null)
           break
         }
 
+          // 推理增量：累积推理文本
         case 'reasoning.delta':
         case 'thinking.delta': {
           const text = evt.text || evt.delta || ''
           if (!text) break
+
           runProducedAssistantText = true
+
           const msgs = getSessionMsgs(sid)
           const reasoningTargetId = reasoningAssistantMessageId || activeAssistantMessageId
-          const last = reasoningTargetId
-            ? msgs.find(m => m.id === reasoningTargetId)
-            : null
+          const last = reasoningTargetId ? msgs.find(m => m.id === reasoningTargetId) : null
+
           if (last?.role === 'assistant') {
+            // 追加到现有消息的 reasoning 字段
             last.reasoning = (last.reasoning || '') + text
             reasoningAssistantMessageId = last.id
             noteReasoningStart(last.id)
           } else {
+            // 创建新的助手消息（仅包含推理）
             const newId = uid()
             addMessage(sid, {
               id: newId,
@@ -3477,6 +3529,8 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 推理可用：标记推理结束（上游发送的是预览内容，不是真正的推理）
+        // 只作为"思考结束"信号，停止时长计数器      
         case 'reasoning.available': {
           const msgs = getSessionMsgs(sid)
           const last = msgs[msgs.length - 1]
@@ -3487,22 +3541,28 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 消息增量：累积助手回复文本
         case 'message.delta': {
           if (evt.delta) {
             runProducedAssistantText = true
             runProducedAssistantContent = true
           }
+
           const msgs = getSessionMsgs(sid)
-          const last = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : null
+          const last = activeAssistantMessageId ? msgs.find(m => m.id === activeAssistantMessageId) : null
+
           if (last?.role === 'assistant' && last.isStreaming) {
+            // 追加到现有消息
             const prev = last.content
             const next = prev + (evt.delta || '')
             noteThinkingDelta(last.id, prev, next)
+
+            // 若之前有 reasoning 累积，则 content 到达即视为推理结束
             if (last.reasoning) noteReasoningEnd(last.id)
+
             last.content = next
           } else {
+            // 创建新的助手消息
             const newId = uid()
             const nextContent = evt.delta || ''
             noteThinkingDelta(newId, '', nextContent)
@@ -3518,70 +3578,80 @@ export const useChatStore = defineStore('chat', () => {
 
           break
         }
-
+        
+        // 会话标题更新
         case 'session.title.updated': {
           applyGeneratedSessionTitle(evt)
           break
         }
 
+        // 工具调用开始
         case 'tool.started': {
           runHadToolActivity = true
+
           const msgs = getSessionMsgs(sid)
           const toolCallId = (evt as any).tool_call_id as string | undefined
-          const last = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : msgs[msgs.length - 1]
+
+          // 找到相关的助手消息并结束流式
+          const last = activeAssistantMessageId ? msgs.find(m => m.id === activeAssistantMessageId) : msgs.at(-1)
           if (last?.isStreaming) {
             updateMessage(sid, last.id, { isStreaming: false })
           }
+
           activeAssistantMessageId = null
-          const existingTool = toolCallId
-            ? msgs.find(m => m.role === 'tool' && m.toolCallId === toolCallId)
-            : null
+
+          // 查找是否已存在相同 toolCallId 的工具消息
+          const existingTool = toolCallId ? msgs.find(m => m.role === 'tool' && m.toolCallId === toolCallId) : null
+
           if (existingTool) {
+            // 更新现有工具消息
             updateMessage(sid, existingTool.id, {
               toolName: evt.tool || evt.name,
               toolArgs: hasRuntimeToolPayload((evt as any).arguments) ? (evt as any).arguments : existingTool.toolArgs,
               toolPreview: evt.preview || existingTool.toolPreview,
               toolStatus: existingTool.toolStatus || 'running',
             })
-            break
+          } else {
+            // 创建新的工具消息
+            addMessage(sid, {
+              id: uid(),
+              role: 'tool',
+              content: '',
+              timestamp: Date.now(),
+              toolName: evt.tool || evt.name,
+              toolCallId,
+              toolPreview: evt.preview,
+              toolArgs: runtimeToolPayloadOrUndefined((evt as any).arguments),
+              toolStatus: 'running',
+            })
           }
-          addMessage(sid, {
-            id: uid(),
-            role: 'tool',
-            content: '',
-            timestamp: Date.now(),
-            toolName: evt.tool || evt.name,
-            toolCallId,
-            toolPreview: evt.preview,
-            toolArgs: runtimeToolPayloadOrUndefined((evt as any).arguments),
-            toolStatus: 'running',
-          })
-
           break
         }
 
+        // 工具调用完成
         case 'tool.completed': {
           runHadToolActivity = true
           const msgs = getSessionMsgs(sid)
           const toolCallId = (evt as any).tool_call_id as string | undefined
-          const toolMsgs = toolCallId
-            ? msgs.filter(m => m.role === 'tool' && m.toolCallId === toolCallId)
-            : msgs.filter(m => m.role === 'tool' && m.toolStatus === 'running')
+
+          // 查找相关的工具消息（优先按 toolCallId，否则找运行中的工具）
+          const toolMsgs = toolCallId ? msgs.filter(m => m.role === 'tool' && m.toolCallId === toolCallId) : msgs.filter(m => m.role === 'tool' && m.toolStatus === 'running')
+
           if (toolMsgs.length > 0) {
             const output = runtimeToolPayloadOrUndefined((evt as any).output)
             const hasError = (evt as any).error === true || runtimeToolOutputHasError(output)
+
+            // 更新工具消息状态和结果
             updateMessage(sid, toolMsgs[toolMsgs.length - 1].id, {
               toolStatus: hasError ? 'error' : 'done',
               toolDuration: (evt as any).duration,
               toolResult: output,
             })
           }
-
           break
         }
-
+        
+        // 子 Agent 事件
         case 'subagent.start':
         case 'subagent.tool':
         case 'subagent.progress':
@@ -3591,46 +3661,56 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
+        // 审批请求
         case 'approval.requested': {
           setPendingApproval(evt)
           break
         }
 
+        // 审批解决
         case 'approval.resolved': {
           clearPendingApproval(evt)
           break
         }
 
+        // 澄清请求
         case 'clarify.requested': {
           setPendingClarify(evt)
           break
         }
 
+        // 澄清解决
         case 'clarify.resolved': {
           clearPendingClarify(evt)
           break
         }
-
+        
+        // 运行完成
         case 'run.completed': {
+          // 清理状态、更新消息、处理最终输出
           clearAgentEventMessages(sid)
+
           const hasQueue = (evt as any).queue_remaining > 0
+
           if (hasQueue) {
             queueLengths.value.set(sid, (evt as any).queue_remaining)
           } else {
             queueLengths.value.delete(sid)
           }
+
           const msgs = getSessionMsgs(sid)
-          const lastMsg = activeAssistantMessageId
-            ? msgs.find(m => m.id === activeAssistantMessageId)
-            : msgs[msgs.length - 1]
-          const completedAssistantMessageId = lastMsg?.role === 'assistant' && lastMsg.isStreaming
-            ? lastMsg.id
-            : null
+          const lastMsg = activeAssistantMessageId ? msgs.find(m => m.id === activeAssistantMessageId) : msgs.at(-1)
+          const completedAssistantMessageId = lastMsg?.role === 'assistant' && lastMsg.isStreaming ? lastMsg.id : null
+
+          // 结束流式消息
           if (lastMsg?.isStreaming) {
             updateMessage(sid, lastMsg.id, { isStreaming: false })
           }
+
+          // 完成所有运行中的工具
           settleRunningTools(sid, 'done')
-          // Server-computed usage (local countTokens, snapshot-aware)
+
+          // 更新服务器计算的 token 使用量
           if ((evt as any).inputTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
             if (target) {
@@ -3639,22 +3719,28 @@ export const useChatStore = defineStore('chat', () => {
               if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
             }
           }
-          // Check if backend provided parsed content (from stringified array format)
+
+          // 备用方案：某些提供商可能只通过 run.completed.output 发送最终助手文本（无 message.delta 流）。
+          // 如果从未产生过助手文本但网关报告了非空输出，则回退到渲染为单个助手消息。
           let finalOutputTrimmed = ''
+
+          // 检查后端是否提供了解析后的内容（从字符串化数组格式）
           if ((evt as any).parsed_content !== undefined) {
-            // Backend has parsed stringified array format, update last assistant message
+            // 后端有解析的字符串化数组格式，更新最后一条助手消息
             const msgs = getSessionMsgs(sid)
+
             const lastAssistant = activeAssistantMessageId
-              ? msgs.find(m => m.id === activeAssistantMessageId)
-              : completedAssistantMessageId
-                ? msgs.find(m => m.id === completedAssistantMessageId)
-                : undefined
-            const parsedContent = typeof (evt as any).parsed_content === 'string'
-              ? (evt as any).parsed_content
-              : ''
+                ? msgs.find(m => m.id === activeAssistantMessageId)
+                : completedAssistantMessageId
+                    ? msgs.find(m => m.id === completedAssistantMessageId)
+                    : undefined
+            const parsedContent = typeof (evt as any).parsed_content === 'string' ? (evt as any).parsed_content : ''
             const parsedContentTrimmed = parsedContent.trim()
+
             if (lastAssistant) {
               const existingContentTrimmed = lastAssistant.content?.trim() ?? ''
+
+              // 如果解析内容非空或现有内容为空，则更新消息
               if (parsedContentTrimmed || !existingContentTrimmed) {
                 updateMessage(sid, lastAssistant.id, {
                   content: parsedContent,
@@ -3668,12 +3754,15 @@ export const useChatStore = defineStore('chat', () => {
                 finalOutputTrimmed = existingContentTrimmed
                 runProducedAssistantText = true
               }
+
               if ((evt as any).parsed_reasoning) {
+                // 更新推理内容
                 updateMessage(sid, lastAssistant.id, {
                   reasoning: (evt as any).parsed_reasoning,
                 })
               }
             } else if (parsedContentTrimmed) {
+              // 更新推理内容
               addMessage(sid, {
                 id: uid(),
                 role: 'assistant',
@@ -3686,8 +3775,9 @@ export const useChatStore = defineStore('chat', () => {
               runProducedAssistantContent = true
             }
           } else {
-            // Fallback to output field (legacy behavior)
+            // 更新推理内容
             const finalOutput = typeof evt.output === 'string' ? evt.output : ''
+
             finalOutputTrimmed = finalOutput.trim()
             if (!runProducedAssistantText && finalOutputTrimmed !== '') {
               addMessage(sid, {
@@ -3700,8 +3790,14 @@ export const useChatStore = defineStore('chat', () => {
               runProducedAssistantContent = true
             }
           }
+
+          // 解决上游 hermes-agent bug：当代理层静默吞没错误（如无效 API 密钥、不支持的模型）时，
+          // 网关仍会发出 run.completed 但输出为空。如果不在此显示错误，聊天 UI 看起来会像冻结/
+          // "成功但无回复"。通过以下组合检测：无助手文本 AND 无工具活动 AND 空最终输出。
           const swallowedError = !runProducedAssistantText && !runHadToolActivity && finalOutputTrimmed === ''
+
           if (swallowedError) {
+            // 添加错误消息
             addMessage(sid, {
               id: uid(),
               role: 'system',
@@ -3709,38 +3805,41 @@ export const useChatStore = defineStore('chat', () => {
               timestamp: Date.now(),
             })
           } else {
+            // 播放完成提示音并显示通知
             playCompletionBellIfEnabled()
             showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
           }
 
-          // Auto-play speech for every completed assistant message
+          // 自动播放语音（如果启用）
           if (autoPlaySpeechEnabled.value && runProducedAssistantContent) {
             const msgs = getSessionMsgs(sid)
             const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant')
             if (lastAssistant?.content) {
+              // 延迟一小会儿再播放，确保 UI 更新完成
               setTimeout(() => {
                 playMessageSpeech(lastAssistant.id, lastAssistant.content)
               }, 300)
             }
           }
 
+          // 清理状态
           if (!hasQueue) {
             cleanup()
-            activeAssistantMessageId = null
-            reasoningAssistantMessageId = null
-            activeRunMarker = null
-          } else {
-            // More runs pending — reset for next run but don't cleanup
-            activeAssistantMessageId = null
-            reasoningAssistantMessageId = null
-            activeRunMarker = null
           }
+
+          activeAssistantMessageId = null
+          reasoningAssistantMessageId = null
+          activeRunMarker = null
+
           updateSessionTitle(sid)
           break
         }
 
+        // 运行失败
         case 'run.failed': {
           clearAgentEventMessages(sid)
+
+          // 更新 token 使用量
           if ((evt as any).inputTokens != null) {
             const target = sessions.value.find(s => s.id === sid)
             if (target) {
@@ -3749,23 +3848,33 @@ export const useChatStore = defineStore('chat', () => {
               if ((evt as any).contextTokens != null) target.contextTokens = (evt as any).contextTokens
             }
           }
+
+          // 如果还有队列消息，更新队列长度
           const hasQueue = (evt as any).queue_remaining > 0
           if (hasQueue) {
             queueLengths.value.set(sid, (evt as any).queue_remaining)
           } else {
             queueLengths.value.delete(sid)
           }
+
+          // 添加错误消息
           addAgentErrorMessage(sid, evt.error)
+
+          // 将所有运行中的工具状态改为错误
           settleRunningTools(sid, 'error')
+
+          // 清理状态
           if (!hasQueue) {
             cleanup()
           }
           activeAssistantMessageId = null
           reasoningAssistantMessageId = null
           activeRunMarker = null
+
           break
         }
 
+        // 使用量更新
         case 'usage.updated': {
           const target = sessions.value.find(s => s.id === sid)
           if (target) {
