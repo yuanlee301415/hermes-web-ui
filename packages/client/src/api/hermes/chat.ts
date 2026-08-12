@@ -173,17 +173,6 @@ export interface ResumeSessionPayload {
   queueMessages?: RunEvent['queued_messages']
 }
 
-// ============================
-// Socket.IO 聊天运行连接管理
-// ============================
-
-/** 当前的聊天运行 Socket 连接实例 */
-let chatRunSocket: Socket | null = null
-/** 全局监听器是否已注册 */
-let globalListenersRegistered = false
-/** 当前 Socket 连接使用的配置文件 */
-let chatRunSocketProfile: string | null = null
-
 /**
  * 临时断开连接的原因集合
  * 这些原因导致的断开会自动重连，不会触发错误
@@ -193,6 +182,7 @@ const TRANSIENT_DISCONNECT_REASONS = new Set<string>([
   'transport error',
   'ping timeout',
 ])
+
 
 /**
  * 会话事件处理器映射
@@ -228,10 +218,27 @@ const sessionEventHandlers = new Map<string, {
 
 /** 全局对等用户消息处理器集合 */
 const peerUserMessageHandlers = new Set<(event: RunEvent) => void>()
+
 /** 全局会话命令处理器集合 */
 const sessionCommandHandlers = new Set<(event: RunEvent) => void>()
+
 /** 全局会话标题更新处理器集合 */
 const sessionTitleUpdatedHandlers = new Set<(event: RunEvent) => void>()
+
+
+// ============================
+// Socket.IO 聊天运行连接管理
+// ============================
+
+/** 当前的聊天运行 Socket 连接实例 */
+let chatRunSocket: Socket | null = null
+
+/** 全局监听器是否已注册 */
+let globalListenersRegistered = false
+
+/** 当前 Socket 连接使用的配置文件 */
+let chatRunSocketProfile: string | null = null
+
 
 /**
  * 全局 message.delta 事件处理器
@@ -240,11 +247,7 @@ const sessionTitleUpdatedHandlers = new Set<(event: RunEvent) => void>()
 function globalMessageDeltaHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onMessageDelta) {
-    handlers.onMessageDelta(event)
-  }
+  sessionEventHandlers.get(sid)?.onMessageDelta?.(event)
 }
 
 /**
@@ -254,11 +257,7 @@ function globalMessageDeltaHandler(event: RunEvent): void {
 function globalReasoningDeltaHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onReasoningDelta) {
-    handlers.onReasoningDelta(event)
-  }
+  sessionEventHandlers.get(sid)?.onReasoningDelta?.(event)
 }
 
 /**
@@ -268,11 +267,7 @@ function globalReasoningDeltaHandler(event: RunEvent): void {
 function globalThinkingDeltaHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onThinkingDelta) {
-    handlers.onThinkingDelta(event)
-  }
+  sessionEventHandlers.get(sid)?.onThinkingDelta?.(event)
 }
 
 /**
@@ -281,12 +276,8 @@ function globalThinkingDeltaHandler(event: RunEvent): void {
  */
 function globalReasoningAvailableHandler(event: RunEvent): void {
   const sid = event.session_id
-  if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onReasoningAvailable) {
-    handlers.onReasoningAvailable(event)
-  }
+  if (!sid) return  
+  sessionEventHandlers.get(sid)?.onReasoningAvailable?.(event)
 }
 
 /**
@@ -296,11 +287,7 @@ function globalReasoningAvailableHandler(event: RunEvent): void {
 function globalToolStartedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onToolStarted) {
-    handlers.onToolStarted(event)
-  }
+  sessionEventHandlers.get(sid)?.onToolStarted?.(event)
 }
 
 /**
@@ -310,11 +297,7 @@ function globalToolStartedHandler(event: RunEvent): void {
 function globalToolCompletedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onToolCompleted) {
-    handlers.onToolCompleted(event)
-  }
+  sessionEventHandlers.get(sid)?.onToolCompleted?.(event)
 }
 
 /**
@@ -324,11 +307,7 @@ function globalToolCompletedHandler(event: RunEvent): void {
 function globalSubagentEventHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onSubagentEvent) {
-    handlers.onSubagentEvent(event)
-  }
+  sessionEventHandlers.get(sid)?.onSubagentEvent?.(event)
 }
 
 /**
@@ -338,11 +317,7 @@ function globalSubagentEventHandler(event: RunEvent): void {
 function globalRunStartedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onRunStarted) {
-    handlers.onRunStarted(event)
-  }
+  sessionEventHandlers.get(sid)?.onRunStarted?.(event)
 }
 
 /**
@@ -353,10 +328,7 @@ function globalRunCompletedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
 
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onRunCompleted) {
-    handlers.onRunCompleted(event)
-  }
+  sessionEventHandlers.get(sid)?.onRunCompleted?.(event)
 
   // 运行完成时自动清理会话处理器（如果还有排队的运行则跳过）
   if ((event as any).queue_remaining > 0) return
@@ -371,11 +343,8 @@ function globalRunFailedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
 
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onRunFailed) {
-    handlers.onRunFailed(event)
-  }
-
+  sessionEventHandlers.get(sid)?.onRunFailed?.(event)
+  
   // 运行失败时自动清理会话处理器（如果还有排队的运行则跳过）
   if ((event as any).queue_remaining > 0) return
   sessionEventHandlers.delete(sid)
@@ -388,11 +357,7 @@ function globalRunFailedHandler(event: RunEvent): void {
 function globalRunQueuedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onRunQueued) {
-    handlers.onRunQueued(event)
-  }
+  sessionEventHandlers.get(sid)?.onRunQueued?.(event)
 }
 
 /**
@@ -402,11 +367,7 @@ function globalRunQueuedHandler(event: RunEvent): void {
 function globalCompressionStartedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onCompressionStarted) {
-    handlers.onCompressionStarted(event)
-  }
+  sessionEventHandlers.get(sid)?.onCompressionStarted?.(event)
 }
 
 /**
@@ -416,11 +377,7 @@ function globalCompressionStartedHandler(event: RunEvent): void {
 function globalCompressionCompletedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onCompressionCompleted) {
-    handlers.onCompressionCompleted(event)
-  }
+  sessionEventHandlers.get(sid)?.onCompressionCompleted?.(event)
 }
 
 /**
@@ -430,11 +387,7 @@ function globalCompressionCompletedHandler(event: RunEvent): void {
 function globalAbortStartedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onAbortStarted) {
-    handlers.onAbortStarted(event)
-  }
+  sessionEventHandlers.get(sid)?.onAbortStarted?.(event)
 }
 
 /**
@@ -444,11 +397,7 @@ function globalAbortStartedHandler(event: RunEvent): void {
 function globalAbortTimeoutHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onAbortTimeout) {
-    handlers.onAbortTimeout(event)
-  }
+  sessionEventHandlers.get(sid)?.onAbortTimeout?.(event)
 }
 
 /**
@@ -459,11 +408,8 @@ function globalAbortTimeoutHandler(event: RunEvent): void {
 function globalAbortCompletedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onAbortCompleted) {
-    handlers.onAbortCompleted(event)
-  }
+  
+  sessionEventHandlers.get(sid)?.onAbortCompleted?.(event)
 
   // 如果中止完成后还有排队的运行，保持处理器存活以便接收后续事件
   if ((event as any).queue_length > 0) return
@@ -477,11 +423,7 @@ function globalAbortCompletedHandler(event: RunEvent): void {
 function globalUsageUpdatedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onUsageUpdated) {
-    handlers.onUsageUpdated(event)
-  }
+  sessionEventHandlers.get(sid)?.onUsageUpdated?.(event)
 }
 
 /**
@@ -492,10 +434,7 @@ function globalSessionCommandHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
 
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onSessionCommand) {
-    handlers.onSessionCommand(event)
-  }
+  sessionEventHandlers.get(sid)?.onSessionCommand?.(event)
 
   for (const handler of sessionCommandHandlers) {
     handler(event)
@@ -510,10 +449,7 @@ function globalSessionTitleUpdatedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
 
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers) {
-    handlers.onSessionTitleUpdated?.(event)
-  }
+  sessionEventHandlers.get(sid)?.onSessionTitleUpdated?.(event)
 
   for (const handler of sessionTitleUpdatedHandlers) {
     handler(event)
@@ -527,11 +463,7 @@ function globalSessionTitleUpdatedHandler(event: RunEvent): void {
 function globalAgentEventHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onAgentEvent) {
-    handlers.onAgentEvent(event)
-  }
+  sessionEventHandlers.get(sid)?.onAgentEvent?.(event)
 }
 
 /**
@@ -541,11 +473,7 @@ function globalAgentEventHandler(event: RunEvent): void {
 function globalRunReattachFailedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onAgentEvent) {
-    handlers.onAgentEvent(event)
-  }
+  sessionEventHandlers.get(sid)?.onAgentEvent?.(event)
 }
 
 /**
@@ -555,11 +483,7 @@ function globalRunReattachFailedHandler(event: RunEvent): void {
 function globalApprovalRequestedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onApprovalRequested) {
-    handlers.onApprovalRequested(event)
-  }
+  sessionEventHandlers.get(sid)?.onApprovalRequested?.(event)
 }
 
 /**
@@ -569,11 +493,7 @@ function globalApprovalRequestedHandler(event: RunEvent): void {
 function globalApprovalResolvedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onApprovalResolved) {
-    handlers.onApprovalResolved(event)
-  }
+  sessionEventHandlers.get(sid)?.onApprovalResolved?.(event)
 }
 
 /**
@@ -584,10 +504,7 @@ function globalPeerUserMessageHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
 
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onPeerUserMessage) {
-    handlers.onPeerUserMessage(event)
-  }
+  sessionEventHandlers.get(sid)?.onPeerUserMessage?.(event)
 
   for (const handler of peerUserMessageHandlers) {
     handler(event)
@@ -601,11 +518,7 @@ function globalPeerUserMessageHandler(event: RunEvent): void {
 function globalClarifyRequestedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onClarifyRequested) {
-    handlers.onClarifyRequested(event)
-  }
+  sessionEventHandlers.get(sid)?.onClarifyRequested?.(event)
 }
 
 /**
@@ -615,11 +528,7 @@ function globalClarifyRequestedHandler(event: RunEvent): void {
 function globalClarifyResolvedHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
-
-  const handlers = sessionEventHandlers.get(sid)
-  if (handlers?.onClarifyResolved) {
-    handlers.onClarifyResolved(event)
-  }
+  sessionEventHandlers.get(sid)?.onClarifyResolved?.(event)
 }
 
 /**
@@ -782,6 +691,7 @@ export function connectChatRun(requestedProfile?: string | null): Socket {
 
   // 获取活动配置文件（优先从状态管理获取，权威来源）
   let profile = normalizedRequestedProfile || 'default'
+  
   try {
     if (!normalizedRequestedProfile) {
       const { useProfilesStore } = require('@/stores/hermes/profiles')
@@ -792,6 +702,7 @@ export function connectChatRun(requestedProfile?: string | null): Socket {
     // 早期初始化时回退到 localStorage
     profile = normalizedRequestedProfile || localStorage.getItem('hermes_active_profile_name') || 'default'
   }
+  
   chatRunSocketProfile = profile
 
   // 创建新的 Socket.IO 连接
@@ -957,8 +868,10 @@ export function startRunViaSocket(
 
   // 跟踪临时断开状态
   let sawTransientDisconnect = false
+  
   // 终端 Socket 监听器清理函数
   let removeTerminalSocketListeners: () => void = () => {}
+  
   // 重连恢复处理器
   let reconnectResumeHandler: ((data: ResumeSessionPayload) => void) | null = null
 
