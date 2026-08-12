@@ -3341,9 +3341,9 @@ export const useChatStore = defineStore('chat', () => {
     
     // 当前 run 的标记符，用于跨事件追踪同一次 run。每次 run.started 或带 marker 的事件都会更新它
     let activeRunMarker: string | null = null
-
+    
     // 清理恢复状态
-    const cleanup = () => {
+    function cleanup() {
       if (closed) return
       closed = true
       streamStates.value.delete(sid)
@@ -3353,7 +3353,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     // 关闭流式助手
-    const closeStreamingAssistant = () => {
+    function closeStreamingAssistant() {
       const msgs = getSessionMsgs(sid)
       msgs.forEach(m => {
         if (m.role === 'assistant' && m.isStreaming) {
@@ -3369,7 +3369,7 @@ export const useChatStore = defineStore('chat', () => {
      * 初始化恢复的助手状态
      * - 从已存在的消息列表中识别"被恢复的助手消息"（可能是页面刷新前未完成的部分），重新挂上 isStreaming 标记并恢复指针，保证 UI 接续显示。
      */
-    const initializeResumedAssistantState = () => {
+    function initializeResumedAssistantState() {
       const resumedAssistantState = resolveResumedAssistantState(getSessionMsgs(sid), { activeRunMarker })
       console.log('initializeResumedAssistantState>resumedAssistantState:', resumedAssistantState)
       activeRunMarker = resumedAssistantState.runMarker
@@ -3386,20 +3386,18 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
-    initializeResumedAssistantState()
-
     // 共享事件处理器 —— 按 session_id 标签过滤
     function handleEvent(evt: RunEvent) {
       if (closed) return
-      
+
       // 过滤此会话的事件（服务器用 session_id 标记所有事件）
       if (evt.session_id && evt.session_id !== sid) return
-      
+
       const eventRunMarker = readRunMarker(evt)
       if (eventRunMarker) activeRunMarker = eventRunMarker
-      
+
       switch (evt.event) {
-        // 运行开始
+          // 运行开始
         case 'run.started': {
           serverWorking.value.add(sid)
 
@@ -3421,14 +3419,14 @@ export const useChatStore = defineStore('chat', () => {
           }
           break
         }
-        
-        // 运行排队
+
+          // 运行排队
         case 'run.queued': {
           handleRunQueuedEvent(sid, evt)
           break
         }
-        
-        // 运行完成
+
+          // 运行完成
         case 'run.completed': {
           // 清理状态、更新消息、处理最终输出
           clearAgentEventMessages(sid)
@@ -3578,7 +3576,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 运行失败
+          // 运行失败
         case 'run.failed': {
           clearAgentEventMessages(sid)
 
@@ -3617,13 +3615,13 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 重连失败：作为代理事件处理
+          // 重连失败：作为代理事件处理
         case 'run.reattach_failed': {
           handleAgentEvent(evt)
           break
         }
 
-        // 压缩开始
+          // 压缩开始
         case 'compression.started': {
           // 设置压缩状态
           setCompressionState(sid, {
@@ -3636,10 +3634,10 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 压缩完成
+          // 压缩完成
         case 'compression.completed': {
           const afterTokens = (evt as any).contextTokens || (evt as any).afterTokens || 0
-          
+
           setCompressionState(sid, {
             compressing: false,
             messageCount: (evt as any).totalMessages || 0,
@@ -3665,7 +3663,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 推理可用  
+          // 推理可用  
         case 'reasoning.available': {
           const msgs = getSessionMsgs(sid)
           const last = msgs[msgs.length - 1]
@@ -3680,7 +3678,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 推理增量：累积推理文本
+          // 推理增量：累积推理文本
         case 'reasoning.delta':
         case 'thinking.delta': {
           const text = evt.text || evt.delta || ''
@@ -3715,8 +3713,8 @@ export const useChatStore = defineStore('chat', () => {
 
           break
         }
- 
-        // 消息增量：累积助手回复文本
+
+          // 消息增量：累积助手回复文本
         case 'message.delta': {
           if (evt.delta) {
             runProducedAssistantText = true
@@ -3753,20 +3751,20 @@ export const useChatStore = defineStore('chat', () => {
 
           break
         }
-        
-        // 会话命令
+
+          // 会话命令
         case 'session.command': {
           handleSessionCommandEvent(evt)
           break
         }
 
-        // 会话标题更新
+          // 会话标题更新
         case 'session.title.updated': {
           applyGeneratedSessionTitle(evt)
           break
         }
 
-        // 工具调用开始
+          // 工具调用开始
         case 'tool.started': {
           runHadToolActivity = true
 
@@ -3809,7 +3807,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 工具调用完成
+          // 工具调用完成
         case 'tool.completed': {
           runHadToolActivity = true
           const msgs = getSessionMsgs(sid)
@@ -3832,7 +3830,7 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 使用量更新
+          // 使用量更新
         case 'usage.updated': {
           const target = sessions.value.find(s => s.id === sid)
           if (target) {
@@ -3842,14 +3840,14 @@ export const useChatStore = defineStore('chat', () => {
           }
           break
         }
-        
-        // 代理事件
+
+          // 代理事件
         case 'agent.event': {
           handleAgentEvent(evt)
           break
         }
-        
-        // 子 Agent 事件
+
+          // 子 Agent 事件
         case 'subagent.start':
         case 'subagent.tool':
         case 'subagent.progress':
@@ -3859,43 +3857,43 @@ export const useChatStore = defineStore('chat', () => {
           break
         }
 
-        // 审批请求
+          // 审批请求
         case 'approval.requested': {
           setPendingApproval(evt)
           break
         }
 
-        // 审批解决
+          // 审批解决
         case 'approval.resolved': {
           clearPendingApproval(evt)
           break
         }
 
-        // 澄清请求
+          // 澄清请求
         case 'clarify.requested': {
           setPendingClarify(evt)
           break
         }
 
-        // 澄清解决
+          // 澄清解决
         case 'clarify.resolved': {
           clearPendingClarify(evt)
           break
         }
 
-        // 中断开始
+          // 中断开始
         case 'abort.started': {
           setAbortState({ aborting: true, synced: null })
           break
         }
 
-        // 中断超时
+          // 中断超时
         case 'abort.timeout': {
           setAbortState({ aborting: true, synced: false, timedOut: true, message: (evt as any).message })
           break
         }
 
-        // 中断完成
+          // 中断完成
         case 'abort.completed': {
           setAbortState({ aborting: false, synced: (evt as any).synced ?? false })
           clearPendingInteractions(sid)
@@ -3929,6 +3927,8 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
 
+    initializeResumedAssistantState()
+
     // 在全局会话映射中注册处理器
     registerSessionHandlers(sid, {
       onMessageDelta: (evt) => handleEvent(evt),
@@ -3954,15 +3954,11 @@ export const useChatStore = defineStore('chat', () => {
       onClarifyResolved: (evt) => handleEvent(evt),
     })
 
-    // 无需在此发送 resume —— switchSession 已经发送过了。
-    // 服务器已经加入房间并重放了事件。
-    // 只需为持续的流式事件设置处理器。
-
     // 标记为流式传输，以便 UI 显示指示器，并且刷新后仍可以中断。
     streamStates.value.set(sid, {
       abort: () => {
         getChatRunSocket()?.emit('abort', { session_id: sid })
-      },
+      }
     })
   }
 
