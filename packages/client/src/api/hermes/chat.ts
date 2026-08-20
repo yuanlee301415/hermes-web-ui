@@ -507,6 +507,7 @@ function globalPeerUserMessageHandler(event: RunEvent): void {
   sessionEventHandlers.get(sid)?.onPeerUserMessage?.(event)
 
   for (const handler of peerUserMessageHandlers) {
+    console.warn(new Date().toLocaleTimeString(), 'globalPeerUserMessageHandler:\n', {event})
     handler(event)
   }
 }

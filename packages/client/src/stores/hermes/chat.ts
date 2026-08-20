@@ -1819,6 +1819,7 @@ export const useChatStore = defineStore('chat', () => {
     const nextMap = new Map(queuedUserMessages.value)
     nextMap.set(sessionId, [...queue, { ...message, queued: true }])
     queuedUserMessages.value = nextMap
+    console.log('enqueueUserMessage:', [...nextMap])
   }
 
   /**
@@ -1984,6 +1985,8 @@ export const useChatStore = defineStore('chat', () => {
    * @param evt 运行事件
    */
   function handleRunQueuedEvent(sessionId: string, evt: RunEvent) {
+    console.group(new Date().toLocaleTimeString(), '[[handleRunQueuedEvent]]:\n', { sessionId, evt })
+    
     // 更新队列长度
     const queueLength = Number((evt as any).queue_length || 0)
     if (queueLength > 0) {
@@ -1993,37 +1996,47 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     // 处理消息出队
-    const dequeuedId = (evt as any).dequeued_queue_id != null
-      ? String((evt as any).dequeued_queue_id)
-      : ''
+    const dequeuedId = (evt as any).dequeued_queue_id != null ? String((evt as any).dequeued_queue_id) : ''
     if (dequeuedId) {
+      console.log('处理消息出队:', { dequeued_queue_id: dequeuedId })
+      
       const existingQueue = queuedUserMessages.value.get(sessionId) || []
       const dequeued = existingQueue.find(message => message.id === dequeuedId)
       
       // 更新队列消息列表
-      if (Array.isArray((evt as any).queued_messages)) {
+     if (Array.isArray((evt as any).queued_messages)) {
         const queued = normalizeQueuedUserMessages((evt as any).queued_messages)
+        console.log('更新队列-1（规范后的消息）:', { queued })
         replaceQueuedUserMessages(sessionId, queued)
+        console.log({queuedUserMessages: [...queuedUserMessages.value]})
       } else {
         const nextQueue = existingQueue.filter(message => message.id !== dequeuedId)
+        console.log('更新队列-2（queuedUserMessages 过滤后的消息）:', { nextQueue })
         replaceQueuedUserMessages(sessionId, nextQueue)
-      }
+        console.log({queuedUserMessages: [...queuedUserMessages.value]})
+     }
       
       // 如果出队消息存在且不在消息列表中，添加到消息列表
       if (dequeued && !getSessionMsgs(sessionId).some(message => message.id === dequeued.id)) {
         addMessage(sessionId, { ...dequeued, queued: false })
+        console.log('添加到消息列表:', { dequeued })
         updateSessionTitle(sessionId)
       } else if (!dequeued) {
         // 消息还没到，标记为已出队
+        console.log('标记为已出队:', { dequeuedId })
         markDequeuedQueueId(sessionId, dequeuedId)
       }
+      console.groupEnd()
       return
     }
 
     // 更新完整队列消息列表
     if (Array.isArray((evt as any).queued_messages)) {
       const queued = normalizeQueuedUserMessages((evt as any).queued_messages)
+      console.log('更新完整队列消息列表:', { sessionId, queued_messages: evt.queued_messages, queued })
       replaceQueuedUserMessages(sessionId, queued)
+      console.log({queuedUserMessages: [...queuedUserMessages.value]})
+      console.groupEnd()
       return
     }
 
@@ -2047,8 +2060,9 @@ export const useChatStore = defineStore('chat', () => {
     if (existingIndex >= 0) {
       msgs.splice(existingIndex, 1)
     }
-
+    
     // 添加到队列
+    console.log('添加到队列:', { sessionId, existing, messageId })    
     enqueueUserMessage(sessionId, {
       ...(existing || {}),
       id: messageId,
@@ -2059,6 +2073,8 @@ export const useChatStore = defineStore('chat', () => {
       queued: true,
       systemType: peer?.role === 'command' ? 'command' : existing?.systemType,
     })
+    
+    console.groupEnd()
   }
 
   /**
@@ -2744,6 +2760,7 @@ export const useChatStore = defineStore('chat', () => {
 
             // 运行排队            
             case 'run.queued': {
+              console.warn(new Date().toLocaleTimeString(), 'run.queued:\n', { sid, evt })
               // 更新队列状态
               handleRunQueuedEvent(sid, evt)
               break
@@ -3972,25 +3989,35 @@ export const useChatStore = defineStore('chat', () => {
   function handlePeerUserMessage(evt: RunEvent) {
     const sid = evt.session_id
     if (!sid || activeSessionId.value !== sid || !activeSession.value) return
-
+    
     const peer = evt.message
     const content = typeof peer?.content === 'string' ? peer.content : ''
-    if (!content.trim()) return
+
+    console.group(new Date().toLocaleTimeString(), '[[handlePeerUserMessage]]:\n', { sid, evt, peer })
+    
+    if (!content.trim()) {
+      console.groupEnd()
+      return
+    }
 
     const messageId = peer?.id != null ? String(peer.id) : ''
     const msgs = getSessionMsgs(sid)
     
     // 如果消息已存在，恢复运行
     if (messageId && msgs.some(msg => msg.id === messageId)) {
+      console.log('消息已存在:', { messageId })
       serverWorking.value.add(sid)
       resumeServerWorkingRun(sid, true)
+      console.groupEnd()
       return
     }
     
     // 如果消息在队列中，恢复运行
     if (messageId && (queuedUserMessages.value.get(sid) || []).some(msg => msg.id === messageId)) {
+      console.log('消息在队列中:', { messageId })
       serverWorking.value.add(sid)
       resumeServerWorkingRun(sid, true)
+      console.groupEnd()
       return
     }
 
@@ -4012,8 +4039,10 @@ export const useChatStore = defineStore('chat', () => {
     
     // 如果消息在队列中或会话正在运行，添加到队列；否则直接添加到消息列表
     if (peer?.queued || (!wasDequeued && isSessionLive(sid))) {
+      console.log('添加到队列:', { sid, messageId })      
       enqueueUserMessage(sid, message)
     } else {
+      console.log('添加到消息列表:', { sid, messageId })
       addMessage(sid, message)
       updateSessionTitle(sid)
     }
@@ -4021,6 +4050,7 @@ export const useChatStore = defineStore('chat', () => {
     // 恢复运行监听
     serverWorking.value.add(sid)
     resumeServerWorkingRun(sid, true)
+    console.groupEnd()
   }
 
   // 注册对等用户消息处理器
